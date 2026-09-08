@@ -33,7 +33,7 @@
 int main(void) {
     /* Inicializa stdio USB (aguarda ate 3 s pelo host USB) */
     stdio_init_all();
-    sleep_ms(3000);
+    sleep_ms(10000);
 
     printf("\n");
     printf("============================================\n");

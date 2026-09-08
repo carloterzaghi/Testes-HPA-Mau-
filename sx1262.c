@@ -203,10 +203,40 @@ static void clear_irq(uint16_t mask) {
     spi_write_cmd(SX1262_CMD_CLEAR_IRQ_STATUS, buf, 2);
 }
 
+/** Imprime os bits de erro relevantes retornados por GetDeviceErrors */
+static void print_device_errors(uint16_t err) {
+    if (err == 0) {
+        printf("[SX1262] DeviceErrors: nenhum erro reportado.\n");
+        return;
+    }
+    printf("[SX1262] DeviceErrors: 0x%04X", err);
+    if (err & (1u << 0)) printf(" RC64K_CALIB_ERR");
+    if (err & (1u << 1)) printf(" RC13M_CALIB_ERR");
+    if (err & (1u << 2)) printf(" PLL_CALIB_ERR");
+    if (err & (1u << 3)) printf(" ADC_CALIB_ERR");
+    if (err & (1u << 4)) printf(" IMG_CALIB_ERR");
+    if (err & (1u << 5)) printf(" XOSC_START_ERR (TCXO/cristal nao estabilizou)");
+    if (err & (1u << 6)) printf(" PLL_LOCK_ERR (PLL de RF nao travou)");
+    if (err & (1u << 8)) printf(" PA_RAMP_ERR");
+    printf("\n");
+}
+
 /* ─── Standby ──────────────────────────────────────────────────────────── */
 static void set_standby_rc(void) {
     uint8_t mode = SX1262_STANDBY_RC;
     spi_write_cmd(SX1262_CMD_SET_STANDBY, &mode, 1);
+}
+
+/** Lê o byte de status bruto (GetStatus, 0xC0); 0x00 ou 0xFF indica SPI quebrado */
+static uint8_t get_status(void) {
+    wait_busy();
+    cs_low();
+    uint8_t cmd = SX1262_CMD_GET_STATUS;
+    uint8_t nop = 0x00, status = 0x00;
+    spi_write_blocking(SX1262_SPI_PORT, &cmd, 1);
+    spi_read_blocking(SX1262_SPI_PORT, nop, &status, 1);
+    cs_high();
+    return status;
 }
 
 /* =========================================================================
@@ -242,6 +272,14 @@ bool sx1262_init(void) {
     /* ── 6. Reset do chip ────────────────────────────────────────────── */
     sx1262_reset();
 
+    /* ── 6b. Checagem de comunicação SPI: 0x00/0xFF = MISO/BUSY não conectados */
+    uint8_t status = get_status();
+    printf("[SX1262] GetStatus bruto apos reset: 0x%02X\n", status);
+    if (status == 0x00 || status == 0xFF) {
+        printf("[ERRO] SPI nao esta se comunicando com o chip (MISO/CS/BUSY/alimentacao).\n");
+        return false;
+    }
+
     /* ── 7. Standby RC ───────────────────────────────────────────────── */
     set_standby_rc();
     sleep_ms(5);
@@ -254,6 +292,27 @@ bool sx1262_init(void) {
      *    Necessário para boards com chave RF controlada por DIO2.          */
     uint8_t dio2_rf = 0x01;
     spi_write_cmd(SX1262_CMD_SET_DIO2_AS_RF_SWITCH, &dio2_rf, 1);
+
+#if SX1262_USE_TCXO
+    /* ── 9b. Habilita o TCXO via DIO3 ────────────────────────────────────
+     *    Sem isso o PLL de RF nunca sincroniza: BUSY continua respondendo
+     *    normalmente (é lógica digital), mas TX/RX nunca completam e o
+     *    chip acaba gerando IRQ_TIMEOUT em vez de TxDone/RxDone.          */
+    uint32_t tcxo_delay_raw = SX1262_TCXO_DELAY_MS * 1000U * 64U / 1000U; /* unidades de 15.625 us */
+    uint8_t tcxo_ctrl[4] = {
+        SX1262_TCXO_VOLTAGE,
+        (uint8_t)(tcxo_delay_raw >> 16),
+        (uint8_t)(tcxo_delay_raw >> 8),
+        (uint8_t)(tcxo_delay_raw)
+    };
+    spi_write_cmd(SX1262_CMD_SET_DIO3_AS_TCXO_CTRL, tcxo_ctrl, 4);
+
+    /* Recalibração completa exigida após habilitar o TCXO (todos os blocos) */
+    uint8_t cal_all = 0x7F;
+    spi_write_cmd(SX1262_CMD_CALIBRATE, &cal_all, 1);
+    sleep_ms(SX1262_TCXO_DELAY_MS + 5);
+    wait_busy();
+#endif
 
     /* ── 10. Calibração de imagem para a faixa 430-440 MHz ──────────────
      *    Valores de frequência da Tabela 9-2 do datasheet SX1262.          */
@@ -374,6 +433,8 @@ bool sx1262_send(const uint8_t *data, uint8_t len, uint32_t timeout_ms) {
     uint32_t start = to_ms_since_boot(get_absolute_time());
     while (!gpio_get(SX1262_DIO1_PIN)) {
         if (to_ms_since_boot(get_absolute_time()) - start > timeout_ms + 200U) {
+            printf("[SX1262] DEBUG - DIO1 nunca subiu (nem TxDone nem Timeout do chip).\n");
+            print_device_errors(sx1262_get_device_errors());
             return false; /* timeout de segurança do software */
         }
         tight_loop_contents();
@@ -381,6 +442,10 @@ bool sx1262_send(const uint8_t *data, uint8_t len, uint32_t timeout_ms) {
 
     uint16_t irq = get_irq_status();
     clear_irq(SX1262_IRQ_ALL);
+
+    if (!(irq & SX1262_IRQ_TX_DONE)) {
+        printf("[SX1262] DEBUG - IRQ bruto no fim do TX: 0x%04X\n", irq);
+    }
 
     return (irq & SX1262_IRQ_TX_DONE) != 0;
 }
@@ -466,3 +531,9 @@ int sx1262_receive(uint8_t *buf, uint8_t *len, uint32_t timeout_ms) {
  * ========================================================================= */
 int8_t sx1262_get_last_rssi(void) { return s_last_rssi; }
 int8_t sx1262_get_last_snr(void)  { return s_last_snr;  }
+
+uint16_t sx1262_get_device_errors(void) {
+    uint8_t buf[2];
+    spi_read_cmd(SX1262_CMD_GET_DEVICE_ERRORS, buf, 2);
+    return ((uint16_t)buf[0] << 8) | buf[1];
+}

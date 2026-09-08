@@ -33,6 +33,15 @@
 #define SX1262_RST_PIN      15
 
 /* =========================================================================
+ * TCXO (oscilador de referência) — a maioria dos módulos SX1262 usa TCXO
+ * alimentado pelo pino DIO3 do próprio chip, em vez de cristal passivo.
+ * Se o seu módulo usar XTAL (sem TCXO), defina SX1262_USE_TCXO como 0.
+ * ========================================================================= */
+#define SX1262_USE_TCXO         1        /* 1 = módulo com TCXO no DIO3   */
+#define SX1262_TCXO_VOLTAGE     0x02U    /* 0x02 = 1.8V (mais comum)      */
+#define SX1262_TCXO_DELAY_MS    5U       /* Tempo de estabilização (ms)   */
+
+/* =========================================================================
  * Parâmetros LoRa (altere conforme necessário)
  * ========================================================================= */
 #define LORA_FREQ_HZ        433000000UL   /* 433 MHz                  */
@@ -74,6 +83,8 @@
 #define SX1262_CMD_GET_RX_BUFFER_STATUS   0x13U
 #define SX1262_CMD_GET_PACKET_STATUS      0x14U
 #define SX1262_CMD_GET_STATUS             0xC0U
+#define SX1262_CMD_GET_DEVICE_ERRORS      0x17U
+#define SX1262_CMD_CLEAR_DEVICE_ERRORS    0x07U
 
 /* =========================================================================
  * Registradores internos do SX1262
@@ -196,5 +207,14 @@ int8_t sx1262_get_last_rssi(void);
  * @brief Retorna o SNR do último pacote recebido (em dB).
  */
 int8_t sx1262_get_last_snr(void);
+
+/**
+ * @brief Lê o registro de erros internos do rádio (GetDeviceErrors, 0x17).
+ *
+ * Útil para diagnosticar travamentos de TX/RX sem IRQ: bit 5 = XOSC_START_ERR
+ * (oscilador/TCXO não estabilizou) e bit 6 = PLL_LOCK_ERR (PLL de RF não travou).
+ * @return Bitmap de 16 bits com os erros reportados pelo chip.
+ */
+uint16_t sx1262_get_device_errors(void);
 
 #endif /* SX1262_H */
