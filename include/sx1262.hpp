@@ -9,8 +9,8 @@
  * Parâmetros LoRa: 433 MHz | SF7 | BW 125 kHz | CR 4/5
  */
 
-#ifndef SX1262_H
-#define SX1262_H
+#ifndef SX1262_HPP
+#define SX1262_HPP
 
 #include <stdint.h>
 #include <stdbool.h>

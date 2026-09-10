@@ -15,7 +15,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "pico/stdlib.h"
-#include "sx1262.h"
+#include "sx1262.hpp"
 
 /* --- Configuracao da aplicacao ------------------------------------------ */
 #define TX_INTERVAL_MS   2000U   /**< Intervalo entre transmissoes (ms)     */

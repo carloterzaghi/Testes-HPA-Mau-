@@ -20,7 +20,7 @@
  *  13. SetDioIrqParams
  */
 
-#include "sx1262.h"
+#include "sx1262.hpp"
 #include <stdio.h>
 #include <string.h>
 

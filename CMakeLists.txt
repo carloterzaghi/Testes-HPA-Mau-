@@ -23,10 +23,11 @@ if (EXISTS ${picoVscode})
     include(${picoVscode})
 endif()
 # ====================================================================================
-set(PICO_BOARD pico CACHE STRING "Board type")
+set(PICO_BOARD pico2 CACHE STRING "Board type")
 
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
+
 
 project(Teste-HPA C CXX ASM)
 
@@ -35,10 +36,10 @@ pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 add_executable(Teste-HPA
-    Teste-HPA.c
-    sx1262.c
+    Teste-HPA.cpp
+    src/sx1262.cpp
+    src/mpu6050.cpp
 )
-
 pico_set_program_name(Teste-HPA "Teste-HPA")
 pico_set_program_version(Teste-HPA "0.1")
 
@@ -49,6 +50,7 @@ pico_enable_stdio_usb(Teste-HPA 1)
 # Bibliotecas necessárias
 target_link_libraries(Teste-HPA
     pico_stdlib
+    hardware_i2c
     hardware_spi
     hardware_gpio
 )
@@ -56,6 +58,8 @@ target_link_libraries(Teste-HPA
 # Inclui o diretório atual para encontrar sx1262.h
 target_include_directories(Teste-HPA PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
+    ${CMAKE_CURRENT_LIST_DIR}/include
+    ${CMAKE_CURRENT_LIST_DIR}/src
 )
 
 pico_add_extra_outputs(Teste-HPA)
