@@ -40,6 +40,7 @@ add_executable(Teste-HPA
     src/sx1262.cpp
     src/mpu6050.cpp
     src/tfluna.cpp
+    src/gy_gps6mv2.cpp
 )
 pico_set_program_name(Teste-HPA "Teste-HPA")
 pico_set_program_version(Teste-HPA "0.1")
@@ -54,6 +55,7 @@ target_link_libraries(Teste-HPA
     hardware_i2c
     hardware_spi
     hardware_gpio
+    hardware_uart
 )
 
 # Inclui o diretório atual para encontrar sx1262.h

@@ -16,6 +16,9 @@
 #include <string.h>
 #include "pico/stdlib.h"
 #include "sx1262.hpp"
+#include "tfluna.hpp"
+#include "gy_gps6mv2.hpp"
+
 
 /* --- Configuracao da aplicacao ------------------------------------------ */
 #define TX_INTERVAL_MS   2000U   /**< Intervalo entre transmissoes (ms)     */
@@ -30,6 +33,10 @@
 /* --- Separador visual no terminal --------------------------------------- */
 #define SEP "--------------------------------------------\n"
 
+TFLuna lidar(TFLUNA_DEFAULT_ADDRESS, 5, 4); // endereço, SCL, SDA
+GYGPS6MV2 gps(uart0, 0, 1); // TX do Pico: GP0, RX do Pico: GP1
+
+
 int main(void) {
     /* Inicializa stdio USB (aguarda ate 3 s pelo host USB) */
     stdio_init_all();
@@ -40,6 +47,7 @@ int main(void) {
     printf("   SX1262 LoRa Transceptor - Pico W\n");
     printf("   433 MHz | SF7 | BW125 | CR4/5\n");
     printf("============================================\n\n");
+    printf("[GPS] UART0 9600 baud | GPS TX -> GP1 (RX) | GPS RX -> GP0 (TX)\n");
 
     /* -- LED de status (GP22, opcional) --------------------------------- */
     gpio_init(STATUS_LED_PIN);
@@ -49,66 +57,38 @@ int main(void) {
     /* -- Inicializacao do SX1262 --------------------------------------- */
     printf("[INIT] Inicializando SX1262...\n");
     if (!sx1262_init()) {
-        printf("[ERRO] Falha ao inicializar o SX1262! Verifique as conexoes.\n");
-        /* Pisca LED rapidamente para sinalizar erro de hardware */
-        while (true) {
-            gpio_put(STATUS_LED_PIN, 1); sleep_ms(100);
-            gpio_put(STATUS_LED_PIN, 0); sleep_ms(100);
-        }
+        printf("[ERRO] Falha ao inicializar o SX1262. Continuando com GPS e Lidar.\n");
+    } else {
+        printf("[INIT] SX1262 inicializado com sucesso!\n\n");
     }
-    printf("[INIT] SX1262 inicializado com sucesso!\n\n");
 
     uint32_t tx_counter = 0;
     uint8_t  rx_buf[MAX_PAYLOAD + 1]; /* +1 para terminador '\0' */
+    uint32_t gps_report_counter = 0;
+    bool gps_diagnostic_done = false;
 
     while (true) {
-        /* -- Transmissao ------------------------------------------------ */
-        char msg[64];
-        int  msg_len = snprintf(msg, sizeof(msg),
-                                "Hello LoRa! #%lu", (unsigned long)tx_counter++);
-
-        /* Liga LED durante transmissao */
-        gpio_put(STATUS_LED_PIN, 1);
-
-        printf("[TX] Enviando: \"%s\" (%d bytes)\n", msg, msg_len);
-        bool tx_ok = sx1262_send((const uint8_t *)msg,
-                                 (uint8_t)msg_len,
-                                 TX_TIMEOUT_MS);
-        gpio_put(STATUS_LED_PIN, 0);
-
-        if (tx_ok) {
-            printf("[TX] OK - Pacote transmitido com sucesso.\n");
-        } else {
-            printf("[TX] FALHA - Timeout ou erro ao transmitir.\n");
+        if (lidar.read()) {
+            printf("Distancia: %u cm\n", lidar.data.distance_cm);
         }
 
-        /* -- Recepcao --------------------------------------------------- */
-        printf("[RX] Aguardando resposta por %u ms...\n", RX_TIMEOUT_MS);
-
-        uint8_t rx_len = 0;
-        int result = sx1262_receive(rx_buf, &rx_len, RX_TIMEOUT_MS);
-
-        if (result > 0) {
-            rx_buf[rx_len] = '\0'; /* garante terminador de string */
-            printf("[RX] OK - Recebido %d byte(s): \"%s\"\n", rx_len, rx_buf);
-            printf("[RX]   RSSI: %d dBm  |  SNR: %d dB\n",
-                   (int)sx1262_get_last_rssi(),
-                   (int)sx1262_get_last_snr());
-        } else {
-            switch (result) {
-                case SX1262_RX_TIMEOUT:
-                    printf("[RX] Timeout - nenhum pacote recebido.\n");
-                    break;
-                case SX1262_RX_CRC_ERROR:
-                    printf("[RX] ERRO - CRC invalido no pacote recebido.\n");
-                    break;
-                default:
-                    printf("[RX] ERRO - codigo %d.\n", result);
-                    break;
+        if (!gps_diagnostic_done) {
+            char gps_sentence[96];
+            if (gps.read_sentence(gps_sentence, sizeof(gps_sentence), 1000)) {
+                printf("[GPS] Sentenca recebida: %s", gps_sentence);
+                gps_diagnostic_done = true;
+            } else {
+                printf("[GPS] Nenhum byte recebido em 1 s. Verifique baud, TX/RX e GND.\n");
             }
+        } else if (gps.update(1000)) {
+            printf("Latitude: %ld\n", gps.data.latitude_e6);
+            printf("Longitude: %ld\n", gps.data.longitude_e6);
+            printf("Altitude: %ld mm\n", gps.data.altitude_mm);
+            printf("Satelites: %u\n", gps.data.satellites);
+        } else if (++gps_report_counter % 5 == 0) {
+            printf("[GPS] Sem fix valido. Verifique antena, alimentacao e GPS TX -> GP1.\n");
         }
 
-        printf(SEP);
-        sleep_ms(TX_INTERVAL_MS);
+        sleep_ms(100);
     }
 }
