@@ -23,7 +23,7 @@ if (EXISTS ${picoVscode})
     include(${picoVscode})
 endif()
 # ====================================================================================
-set(PICO_BOARD pico2 CACHE STRING "Board type")
+set(PICO_BOARD pico CACHE STRING "Board type")
 
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
@@ -39,6 +39,7 @@ add_executable(Teste-HPA
     Teste-HPA.cpp
     src/sx1262.cpp
     src/mpu6050.cpp
+    src/tfluna.cpp
 )
 pico_set_program_name(Teste-HPA "Teste-HPA")
 pico_set_program_version(Teste-HPA "0.1")
