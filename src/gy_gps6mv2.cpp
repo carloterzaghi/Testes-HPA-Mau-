@@ -122,8 +122,14 @@ bool GYGPS6MV2::update(uint32_t timeout_ms) {
     char sentence[sentence_buffer_size];
     uint32_t start = to_ms_since_boot(get_absolute_time());
 
-    while (to_ms_since_boot(get_absolute_time()) - start < timeout_ms) {
-        if (read_sentence(sentence, sizeof(sentence), timeout_ms)) {
+    while (true) {
+        uint32_t elapsed = to_ms_since_boot(get_absolute_time()) - start;
+        if (elapsed >= timeout_ms) {
+            break;
+        }
+
+        uint32_t remaining = timeout_ms - elapsed;
+        if (read_sentence(sentence, sizeof(sentence), remaining)) {
             if (_parse_sentence(sentence)) {
                 return true;
             }

@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#include "hardware/i2c.h"
+#include "i2c_bus.hpp"
 
 #define TFLUNA_DEFAULT_ADDRESS 0x10
 #define TFLUNA_I2C_FREQUENCY 400000
@@ -18,16 +18,15 @@ typedef struct {
 
 class TFLuna {
 public:
-    TFLuna(uint8_t address, uint8_t i2c_scl_pin, uint8_t i2c_sda_pin);
+    TFLuna(I2CBus& bus, uint8_t address);
 
     bool read();
 
     tfluna_data_t data;
 
 private:
+    I2CBus& _bus;
     uint8_t _address;
-    uint8_t _i2c_scl_pin;
-    uint8_t _i2c_sda_pin;
 };
 
 #endif

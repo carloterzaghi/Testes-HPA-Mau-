@@ -37,6 +37,9 @@ pico_sdk_init()
 # Add executable. Default name is the project name, version 0.1
 add_executable(Teste-HPA
     Teste-HPA.cpp
+    src/as5600.cpp
+    src/bmp280.cpp
+    src/i2c_bus.cpp
     src/sx1262.cpp
     src/mpu6050.cpp
     src/tfluna.cpp
@@ -53,6 +56,8 @@ pico_enable_stdio_usb(Teste-HPA 1)
 target_link_libraries(Teste-HPA
     pico_stdlib
     hardware_i2c
+    hardware_adc
+    hardware_timer
     hardware_spi
     hardware_gpio
     hardware_uart

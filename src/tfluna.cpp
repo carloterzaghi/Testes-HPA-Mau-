@@ -2,30 +2,22 @@
 
 #include "pico/stdlib.h"
 
-TFLuna::TFLuna(uint8_t address, uint8_t i2c_scl_pin, uint8_t i2c_sda_pin)
-    : _address(address),
-      _i2c_scl_pin(i2c_scl_pin),
-      _i2c_sda_pin(i2c_sda_pin),
+TFLuna::TFLuna(I2CBus& bus, uint8_t address)
+    : _bus(bus),
+    _address(address),
       data{} {
-    i2c_init(i2c_default, TFLUNA_I2C_FREQUENCY);
-    gpio_set_function(_i2c_scl_pin, GPIO_FUNC_I2C);
-    gpio_set_function(_i2c_sda_pin, GPIO_FUNC_I2C);
-    gpio_pull_up(_i2c_scl_pin);
-    gpio_pull_up(_i2c_sda_pin);
 }
 
 bool TFLuna::read() {
     uint8_t register_address = TFLUNA_DATA_REGISTER;
     uint8_t buffer[TFLUNA_DATA_LENGTH];
 
-    int write_result = i2c_write_blocking(
-        i2c_default, _address, &register_address, 1, true);
+    int write_result = _bus.write(_address, &register_address, 1, true);
     if (write_result != 1) {
         return false;
     }
 
-    int read_result = i2c_read_blocking(
-        i2c_default, _address, buffer, TFLUNA_DATA_LENGTH, false);
+    int read_result = _bus.read(_address, buffer, TFLUNA_DATA_LENGTH, false);
     if (read_result != TFLUNA_DATA_LENGTH) {
         return false;
     }
