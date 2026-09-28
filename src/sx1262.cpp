@@ -29,6 +29,13 @@
  * ========================================================================= */
 static int8_t s_last_rssi = 0;
 static int8_t s_last_snr  = 0;
+static volatile bool s_rx_irq_pending = false;
+
+static void sx1262_dio1_callback(uint gpio, uint32_t events) {
+    if (gpio == SX1262_DIO1_PIN && (events & GPIO_IRQ_EDGE_RISE)) {
+        s_rx_irq_pending = true;
+    }
+}
 
 /* =========================================================================
  * Primitivas SPI / GPIO
@@ -397,6 +404,10 @@ bool sx1262_init(void) {
 
     /* ── 21. Limpa quaisquer IRQs pendentes ─────────────────────────── */
     clear_irq(SX1262_IRQ_ALL);
+    gpio_set_irq_enabled_with_callback(SX1262_DIO1_PIN,
+                                       GPIO_IRQ_EDGE_RISE,
+                                       true,
+                                       &sx1262_dio1_callback);
 
     return true;
 }
@@ -424,6 +435,7 @@ bool sx1262_send(const uint8_t *data, uint8_t len, uint32_t timeout_ms) {
 
     /* Limpa IRQs anteriores e inicia transmissão */
     clear_irq(SX1262_IRQ_ALL);
+    s_rx_irq_pending = false;
 
     uint8_t tx_timeout[3];
     timeout_to_bytes(timeout_ms, tx_timeout);
@@ -435,6 +447,9 @@ bool sx1262_send(const uint8_t *data, uint8_t len, uint32_t timeout_ms) {
         if (to_ms_since_boot(get_absolute_time()) - start > timeout_ms + 200U) {
             printf("[SX1262] DEBUG - DIO1 nunca subiu (nem TxDone nem Timeout do chip).\n");
             print_device_errors(sx1262_get_device_errors());
+#if LORA_MODE == LORA_MODE_RX
+            sx1262_start_receive();
+#endif
             return false; /* timeout de segurança do software */
         }
         tight_loop_contents();
@@ -442,87 +457,78 @@ bool sx1262_send(const uint8_t *data, uint8_t len, uint32_t timeout_ms) {
 
     uint16_t irq = get_irq_status();
     clear_irq(SX1262_IRQ_ALL);
+    s_rx_irq_pending = false;
 
     if (!(irq & SX1262_IRQ_TX_DONE)) {
         printf("[SX1262] DEBUG - IRQ bruto no fim do TX: 0x%04X\n", irq);
     }
 
-    return (irq & SX1262_IRQ_TX_DONE) != 0;
+    bool sent = (irq & SX1262_IRQ_TX_DONE) != 0;
+#if LORA_MODE == LORA_MODE_RX
+    sx1262_start_receive();
+#endif
+    return sent;
 }
 
 /* =========================================================================
  * Recepção
  * ========================================================================= */
-int sx1262_receive(uint8_t *buf, uint8_t *len, uint32_t timeout_ms) {
-    /* Volta ao modo Standby antes de configurar RX */
+void sx1262_start_receive(void) {
+    s_rx_irq_pending = false;
     set_standby_rc();
 
-    /* Packet params para RX: payload máximo */
     uint8_t pkt_params[6] = {
         (uint8_t)(LORA_PREAMBLE_LEN >> 8),
         (uint8_t)(LORA_PREAMBLE_LEN),
-        0x00,   /* header explícito */
-        0xFF,   /* max payload em RX */
-        0x01,   /* CRC habilitado */
-        0x00    /* IQ normal */
+        0x00,
+        0xFF,
+        0x01,
+        0x00
     };
     spi_write_cmd(SX1262_CMD_SET_PACKET_PARAMS, pkt_params, 6);
-
-    /* Limpa IRQs e entra em modo RX com timeout configurado */
     clear_irq(SX1262_IRQ_ALL);
 
-    uint8_t rx_timeout[3];
-    timeout_to_bytes(timeout_ms, rx_timeout);
-    spi_write_cmd(SX1262_CMD_SET_RX, rx_timeout, 3);
+    /* 0xFFFFFF = RX continuo; o proximo pacote gera IRQ em DIO1. */
+    uint8_t rx_continuous[3] = { 0xFF, 0xFF, 0xFF };
+    spi_write_cmd(SX1262_CMD_SET_RX, rx_continuous, 3);
+}
 
-    /* Aguarda DIO1 (RxDone, Timeout ou CrcErr) */
-    uint32_t start = to_ms_since_boot(get_absolute_time());
-    while (!gpio_get(SX1262_DIO1_PIN)) {
-        /* Timeout de segurança do software com 500 ms de margem */
-        if (to_ms_since_boot(get_absolute_time()) - start > timeout_ms + 500U) {
-            return SX1262_RX_TIMEOUT;
-        }
-        tight_loop_contents();
+int sx1262_receive_available(uint8_t *buf, uint8_t *len) {
+    if (!s_rx_irq_pending) {
+        return SX1262_RX_TIMEOUT;
     }
 
+    s_rx_irq_pending = false;
     uint16_t irq = get_irq_status();
     clear_irq(SX1262_IRQ_ALL);
 
-    /* Verifica o resultado do IRQ */
-    if (irq & SX1262_IRQ_TIMEOUT) {
-        return SX1262_RX_TIMEOUT;
-    }
     if (irq & SX1262_IRQ_CRC_ERR) {
+        sx1262_start_receive();
         return SX1262_RX_CRC_ERROR;
     }
     if (!(irq & SX1262_IRQ_RX_DONE)) {
         return SX1262_RX_ERROR;
     }
 
-    /* Lê status do buffer RX: [payloadLen, rxStartBufferPointer] */
     uint8_t rx_status[2];
     spi_read_cmd(SX1262_CMD_GET_RX_BUFFER_STATUS, rx_status, 2);
-    uint8_t payload_len   = rx_status[0];
+    uint8_t payload_len = rx_status[0];
     uint8_t rx_buf_offset = rx_status[1];
-
     if (payload_len == 0) {
         *len = 0;
+        sx1262_start_receive();
         return 0;
     }
 
-    /* Lê os dados do buffer FIFO */
     read_buffer(rx_buf_offset, buf, payload_len);
     *len = payload_len;
 
-    /* Lê estatísticas do pacote: [rssiPkt, snrPkt, signalRssiPkt]
-     * RSSI [dBm] = -rssiPkt / 2
-     * SNR  [dB]  =  snrPkt  / 4  (int8_t com sinal)
-     */
     uint8_t pkt_status[3];
     spi_read_cmd(SX1262_CMD_GET_PACKET_STATUS, pkt_status, 3);
     s_last_rssi = (int8_t)(-(int16_t)pkt_status[0] / 2);
-    s_last_snr  = (int8_t)((int8_t)pkt_status[1]   / 4);
+    s_last_snr = (int8_t)((int8_t)pkt_status[1] / 4);
 
+    sx1262_start_receive();
     return (int)payload_len;
 }
 

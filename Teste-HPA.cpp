@@ -28,7 +28,6 @@
 /* --- Configuracao da aplicacao ------------------------------------------ */
 #define TX_INTERVAL_MS   2000U   /**< Intervalo entre transmissoes (ms)     */
 #define TX_TIMEOUT_MS    1000U   /**< Timeout para TxDone (ms)              */
-#define RX_TIMEOUT_MS    3000U   /**< Timeout para aguardar resposta (ms)   */
 #define MAX_PAYLOAD      255U    /**< Tamanho maximo do buffer de recepcao  */
 
 /** LED de status externo opcional (GP22, ~330 ohm para GND).
@@ -88,10 +87,14 @@ int main(void) {
 
     /* -- Inicializacao do SX1262 --------------------------------------- */
     printf("[INIT] Inicializando SX1262...\n");
-    if (!sx1262_init()) {
+    bool lora_ready = sx1262_init();
+    if (!lora_ready) {
         printf("[ERRO] Falha ao inicializar o SX1262. Continuando com GPS e Lidar.\n");
     } else {
         printf("[INIT] SX1262 inicializado com sucesso!\n\n");
+#if LORA_MODE == LORA_MODE_RX
+        sx1262_start_receive();
+#endif
     }
 
     printf("[INIT] Inicializando BMP280...\n");
@@ -117,8 +120,16 @@ int main(void) {
         printf("[INIT] Timer dos sensores configurado em %.2f kHz.\n", 1.0f / sensor_interval_ms);
     }
 
+#if LORA_MODE == LORA_MODE_TX
     uint32_t tx_counter = 0;
+#endif
+#if LORA_MODE == LORA_MODE_RX
     uint8_t  rx_buf[MAX_PAYLOAD + 1]; /* +1 para terminador '\0' */
+#endif
+#if LORA_MODE == LORA_MODE_TX
+    uint32_t next_tx_ms = to_ms_since_boot(get_absolute_time()) + 1000U
+                        + static_cast<uint32_t>(time_us_64() % 1000ULL);
+#endif
     uint32_t gps_report_counter = 0;
     uint32_t heartbeat_counter = 0;
     uint32_t encoder_wait_start_ms =
@@ -168,7 +179,7 @@ int main(void) {
 
             if (!gps_diagnostic_done) {
                 char gps_sentence[96];
-                if (gps.read_sentence(gps_sentence, sizeof(gps_sentence), 1000)) {
+                if (gps.read_sentence(gps_sentence, sizeof(gps_sentence), 20)) {
                     printf("[GPS] Sentenca recebida: %s", gps_sentence);
                     gps_diagnostic_done = is_gps_navigation_sentence(gps_sentence);
                     if (!gps_diagnostic_done) {
@@ -177,7 +188,7 @@ int main(void) {
                 } else {
                     //printf("[GPS] Nenhuma sentenca NMEA recebida em 1 s. Verifique baud, TX/RX e GND.\n");
                 }
-            } else if (gps.update(1000)) {
+            } else if (gps.update(20)) {
                 printf("Latitude: %ld\n", gps.data.latitude_e6);
                 printf("Longitude: %ld\n", gps.data.longitude_e6);
                 printf("Altitude: %ld mm\n", gps.data.altitude_mm);
@@ -187,12 +198,48 @@ int main(void) {
             }
         }
 
-        if (++heartbeat_counter >= 20) {
-            heartbeat_counter = 0;
-            printf("[STATUS] Firmware em execucao; USB serial conectada=%s\n",
-                   stdio_usb_connected() ? "sim" : "nao");
-        }
+    #if LORA_MODE == LORA_MODE_TX
+        uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+        if (lora_ready && now_ms >= next_tx_ms) {
+            next_tx_ms = now_ms + TX_INTERVAL_MS
+                       + static_cast<uint32_t>(time_us_64() % 500ULL);
 
-        sleep_ms(100);
+            char payload[MAX_PAYLOAD + 1];
+            int payload_len = snprintf(
+                payload, sizeof(payload), "contador=%lu",
+                static_cast<unsigned long>(tx_counter++));
+
+            if (payload_len > 0 && payload_len <= MAX_PAYLOAD) {
+                bool sent = sx1262_send(
+                    reinterpret_cast<const uint8_t *>(payload),
+                    static_cast<uint8_t>(payload_len),
+                    TX_TIMEOUT_MS);
+                printf("[LORA] TX %s (%d bytes): %s\n",
+                       sent ? "OK" : "falhou", payload_len, payload);
+            } else {
+                printf("[LORA] Payload excedeu %u bytes.\n", MAX_PAYLOAD);
+            }
+        }
+#endif
+
+#if LORA_MODE == LORA_MODE_RX
+        if (lora_ready) {
+            uint8_t received_len = 0;
+            int receive_result = sx1262_receive_available(
+                rx_buf, &received_len);
+            if (receive_result > 0) {
+                rx_buf[received_len] = '\0';
+                //printf("[LORA] RX (%u bytes, RSSI %d dBm, SNR %d dB): %s\n",
+                //       received_len,
+                //       sx1262_get_last_rssi(),
+                //       sx1262_get_last_snr(),
+                //       reinterpret_cast<const char *>(rx_buf));
+            } else if (receive_result == SX1262_RX_CRC_ERROR) {
+                printf("[LORA] RX descartado: erro de CRC\n");
+            }
+        }
+#endif
+
+        sleep_ms(10);
     }
 }

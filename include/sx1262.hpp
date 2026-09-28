@@ -48,10 +48,14 @@
 #define LORA_SF             7             /* Spreading Factor 7       */
 #define LORA_BW             SX1262_BW_125 /* Bandwidth 125 kHz        */
 #define LORA_CR             SX1262_CR_4_5 /* Coding Rate 4/5          */
-#define LORA_TX_POWER_DBM   14            /* Potência TX em dBm       */
+#define LORA_TX_POWER_DBM   14           /* Potência TX em dBm       */
 #define LORA_PREAMBLE_LEN   8             /* Símbolos de preâmbulo    */
 #define LORA_SYNC_WORD_PRI  0x14          /* Sync word rede privada   */
 #define LORA_SYNC_WORD_SEC  0x24          /* (par: 0x1424 = privado)  */
+
+#define LORA_MODE_TX        1             /* Apenas transmite          */
+#define LORA_MODE_RX        2             /* Apenas recebe             */
+#define LORA_MODE           LORA_MODE_RX  /* Troque para LORA_MODE_RX  */
 
 /* =========================================================================
  * Comandos do SX1262 (Tabela 11-1 do datasheet)
@@ -189,14 +193,11 @@ bool sx1262_init(void);
  */
 bool sx1262_send(const uint8_t *data, uint8_t len, uint32_t timeout_ms);
 
-/**
- * @brief Aguarda e lê um pacote LoRa recebido.
- * @param buf        Buffer de destino (mínimo 256 bytes)
- * @param len        [out] Número de bytes recebidos
- * @param timeout_ms Timeout em ms para aguardar RxDone
- * @return Número de bytes recebidos (> 0) ou sx1262_rx_status_t (< 0)
- */
-int sx1262_receive(uint8_t *buf, uint8_t *len, uint32_t timeout_ms);
+/** Inicia recepcao continua; os pacotes sao sinalizados por DIO1. */
+void sx1262_start_receive(void);
+
+/** Le um pacote sinalizado pela interrupcao, sem bloquear. */
+int sx1262_receive_available(uint8_t *buf, uint8_t *len);
 
 /**
  * @brief Retorna o RSSI do último pacote recebido (em dBm).
